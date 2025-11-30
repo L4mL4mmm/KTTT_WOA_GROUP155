@@ -1,0 +1,100 @@
+# woa_beamforming.py
+# WOA implementation (minimization) + beamforming example
+import numpy as np
+import time
+
+def whale_optimize(objective, dim, lb, ub, pop_size=30, max_iter=200, b=1.0, seed=None):
+    """
+    WOA minimizer
+    objective: function(x) -> scalar (lower better)
+    dim: dimension
+    lb, ub: scalars or arrays
+    """
+    rng = np.random.default_rng(seed)
+    lb = np.array(lb) if np.ndim(lb) else np.full(dim, lb)
+    ub = np.array(ub) if np.ndim(ub) else np.full(dim, ub)
+    X = rng.uniform(low=lb, high=ub, size=(pop_size, dim))
+    fitness = np.array([objective(x) for x in X])
+    idx_best = np.argmin(fitness)
+    X_best = X[idx_best].copy()
+    f_best = fitness[idx_best]
+    history = [f_best]
+    for t in range(max_iter):
+        a = 2.0 - 2.0 * t / max(1, (max_iter - 1))
+        for i in range(pop_size):
+            r1, r2 = rng.random(), rng.random()
+            A = 2.0 * a * r1 - a
+            C = 2.0 * r2
+            p = rng.random()
+            l = rng.uniform(-1, 1)
+            if p < 0.5:
+                if abs(A) < 1:
+                    D = np.abs(C * X_best - X[i])
+                    X_new = X_best - A * D
+                else:
+                    rand_idx = rng.integers(pop_size)
+                    X_rand = X[rand_idx]
+                    D = np.abs(C * X_rand - X[i])
+                    X_new = X_rand - A * D
+            else:
+                Dp = np.abs(X_best - X[i])
+                X_new = Dp * np.exp(b * l) * np.cos(2 * np.pi * l) + X_best
+            # boundary
+            X_new = np.minimum(np.maximum(X_new, lb), ub)
+            f_new = objective(X_new)
+            if f_new < fitness[i]:
+                X[i] = X_new
+                fitness[i] = f_new
+            if f_new < f_best:
+                f_best = f_new
+                X_best = X_new.copy()
+        history.append(f_best)
+    return X_best, f_best, np.array(history)
+
+def beamforming_objective(x, h, sigma2, power_budget=1.0):
+    """
+    x: real vector length 2M (real(w) | imag(w))
+    h: complex channel vector length M
+    sigma2: noise power (scalar)
+    returns negative SNR (to minimize)
+    """
+    M = h.size
+    real_w = x[:M]
+    imag_w = x[M:]
+    w = real_w + 1j * imag_w
+    norm_w2 = np.vdot(w, w).real
+    if norm_w2 == 0:
+        w = w
+    else:
+        w = np.sqrt(power_budget) * w / np.sqrt(norm_w2)
+    snr = np.abs(np.vdot(h.conj(), w))**2 / sigma2
+    return -snr
+
+if __name__ == "__main__":
+    seed = 123
+    rng = np.random.default_rng(seed)
+    M = 4
+    h = (rng.normal(size=M) + 1j * rng.normal(size=M))
+    sigma2 = 1e-3
+    dim = 2 * M
+    lb = -1.0
+    ub = 1.0
+    obj = lambda x: beamforming_objective(x, h, sigma2, power_budget=1.0)
+    t0 = time.time()
+    best_x, best_f, hist = whale_optimize(obj, dim, lb, ub, pop_size=50, max_iter=250, seed=seed)
+    t1 = time.time()
+    real_w = best_x[:M]; imag_w = best_x[M:]
+    w_best = real_w + 1j * imag_w
+    # normalize
+    norm = np.vdot(w_best, w_best).real
+    if norm != 0:
+        w_best = w_best * np.sqrt(1.0 / norm)
+    print("Best SNR:", -best_f)
+    print("w_best:", w_best)
+    print("Time elapsed: {:.3f} s".format(t1 - t0))
+
+    # Optional: save history to file for plotting later
+    try:
+        np.savetxt("woa_history.txt", hist)
+    except Exception:
+        pass
