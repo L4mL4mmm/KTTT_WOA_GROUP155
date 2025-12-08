@@ -1,0 +1,225 @@
+import numpy as np
+import time
+
+# ==============================================================================
+# PHẦN 1: ĐỊNH NGHĨA CÁC THUẬT TOÁN WOA
+# ==============================================================================
+
+def whale_optimize_GOC(objective, dim, lb, ub, pop_size=30, max_iter=200, b=1.0, seed=None):
+    """WOA Gốc (Tuyến tính)"""
+    rng = np.random.default_rng(seed)
+    lb = np.array(lb) if np.ndim(lb) else np.full(dim, lb)
+    ub = np.array(ub) if np.ndim(ub) else np.full(dim, ub)
+    X = rng.uniform(low=lb, high=ub, size=(pop_size, dim))
+    fitness = np.array([objective(x) for x in X])
+    idx_best = np.argmin(fitness)
+    X_best = X[idx_best].copy()
+    f_best = fitness[idx_best]
+    
+    for t in range(max_iter):
+        # CẬP NHẬT THAM SỐ a (WOA GỐC - TUYẾN TÍNH)
+        a = 2.0 - 2.0 * t / max(1, (max_iter - 1))
+        
+        for i in range(pop_size):
+            r1, r2 = rng.random(), rng.random()
+            A = 2.0 * a * r1 - a
+            C = 2.0 * r2
+            p = rng.random()
+            l = rng.uniform(-1, 1)
+            
+            if p < 0.5:
+                if abs(A) < 1:
+                    # Bao vây X_best (Exploitation)
+                    D = np.abs(C * X_best - X[i])
+                    X_new = X_best - A * D
+                else:
+                    # Tìm kiếm ngẫu nhiên X_rand (Exploration)
+                    rand_idx = rng.integers(pop_size)
+                    X_rand = X[rand_idx]
+                    D = np.abs(C * X_rand - X[i])
+                    X_new = X_rand - A * D
+            else:
+                # Tấn công xoắn ốc (Exploitation)
+                Dp = np.abs(X_best - X[i])
+                X_new = Dp * np.exp(b * l) * np.cos(2 * np.pi * l) + X_best
+            
+            # Kiểm tra biên (Boundary)
+            X_new = np.minimum(np.maximum(X_new, lb), ub)
+            
+            f_new = objective(X_new)
+            if f_new < fitness[i]:
+                X[i] = X_new
+                fitness[i] = f_new
+            
+            if f_new < f_best:
+                f_best = f_new
+                X_best = X_new.copy()
+                
+    return X_best, f_best, None
+
+def whale_optimize_EWOA(objective, dim, lb, ub, pop_size=30, max_iter=200, b=1.0, seed=None):
+    """EWOA Biến thể (Phi tuyến)"""
+    rng = np.random.default_rng(seed)
+    lb = np.array(lb) if np.ndim(lb) else np.full(dim, lb)
+    ub = np.array(ub) if np.ndim(ub) else np.full(dim, ub)
+    X = rng.uniform(low=lb, high=ub, size=(pop_size, dim))
+    fitness = np.array([objective(x) for x in X])
+    idx_best = np.argmin(fitness)
+    X_best = X[idx_best].copy()
+    f_best = fitness[idx_best]
+    
+    for t in range(max_iter):
+        # CẬP NHẬT THAM SỐ a (EWOA - PHI TUYẾN/PARABOLIC)
+        progress_ratio = t / max(1, (max_iter - 1))
+        a = 2.0 * (1.0 - progress_ratio**2) # Quy luật phi tuyến
+        
+        for i in range(pop_size):
+            r1, r2 = rng.random(), rng.random()
+            A = 2.0 * a * r1 - a
+            C = 2.0 * r2
+            p = rng.random()
+            l = rng.uniform(-1, 1)
+            
+            if p < 0.5:
+                if abs(A) < 1:
+                    # Bao vây X_best (Exploitation)
+                    D = np.abs(C * X_best - X[i])
+                    X_new = X_best - A * D
+                else:
+                    # Tìm kiếm ngẫu nhiên X_rand (Exploration)
+                    rand_idx = rng.integers(pop_size)
+                    X_rand = X[rand_idx]
+                    D = np.abs(C * X_rand - X[i])
+                    X_new = X_rand - A * D
+            else:
+                # Tấn công xoắn ốc (Exploitation)
+                Dp = np.abs(X_best - X[i])
+                X_new = Dp * np.exp(b * l) * np.cos(2 * np.pi * l) + X_best
+            
+            # Kiểm tra biên (Boundary)
+            X_new = np.minimum(np.maximum(X_new, lb), ub)
+            
+            f_new = objective(X_new)
+            if f_new < fitness[i]:
+                X[i] = X_new
+                fitness[i] = f_new
+            
+            if f_new < f_best:
+                f_best = f_new
+                X_best = X_new.copy()
+                
+    return X_best, f_best, None
+    
+# ==============================================================================
+# PHẦN 2: HÀM MỤC TIÊU MỚI (SINR + PENALTY METHOD)
+# ==============================================================================
+
+def beamforming_objective_penalty(x, h, sigma2, I_ext=1e-3, P_max=1.0, lambda_penalty=1000):
+    """
+    Hàm mục tiêu: Minimize -SINR + Penalty_term
+    Sử dụng Penalty Method để xử lý ràng buộc công suất (Constraint Handling).
+    """
+    M = h.size
+    real_w = x[:M]
+    imag_w = x[M:]
+    w = real_w + 1j * imag_w
+    
+    P_tx = np.vdot(w, w).real
+    
+    # TÍNH SINR: |h^H * w|^2 / (sigma2 + I_ext)
+    signal_power = np.abs(np.vdot(h.conj(), w))**2
+    noise_interference = sigma2 + I_ext
+    sinr = signal_power / noise_interference
+    
+    # TÍNH HỆ SỐ PHẠT (Penalty Term)
+    # Phạt bậc hai nếu công suất vượt quá P_max (P_tx > P_max)
+    if P_tx > P_max:
+        penalty_term = lambda_penalty * (P_tx - P_max)**2
+    else:
+        penalty_term = 0
+        
+    # Kết hợp: -SINR (để minimize) + Penalty
+    return -sinr + penalty_term
+
+# ==============================================================================
+# PHẦN 3: KHỐI THỰC THI CHÍNH (CHẠY THỬ NGHIỆM)
+# ==============================================================================
+
+if __name__ == "__main__":
+    
+    # KHỞI TẠO THAM SỐ HỌC THUẬT (MINLP/Resource Allocation Context)
+    seed = 123 
+    rng = np.random.default_rng(seed)
+    M = 4 # Số anten tại BS
+    P_MAX = 1.0 # Giới hạn công suất tối đa
+    LAMBDA_PENALTY = 1000 # Hệ số phạt (Lambda)
+    I_EXTERNAL = 0.05 # Nhiễu ngoài (I)
+    sigma2 = 1e-3 # Nhiễu nhiệt
+    
+    # Kênh cố định (đã dùng trong báo cáo cũ)
+    h_fixed = np.array([-0.1802-0.0886j, -0.6389-0.1039j, 0.4571-1.1278j, -0.3649+0.1706j]) 
+    
+    dim = 2 * M 
+    # Giới hạn tìm kiếm: Đặt rộng để WOA có không gian để bị phạt
+    lb = -1.0
+    ub = 1.0
+    
+    # Hàm mục tiêu mới với Penalty Method
+    obj_penalty = lambda x: beamforming_objective_penalty(
+        x, h_fixed, sigma2, I_ext=I_EXTERNAL, P_max=P_MAX, lambda_penalty=LAMBDA_PENALTY
+    )
+    
+    # THÔNG SỐ THUẬT TOÁN (Giới hạn tài nguyên để lộ ra sự khác biệt)
+    POP_SIZE = 20
+    MAX_ITER = 100
+
+    print("--- CHẠY WOA GỐC (Tuyến tính + Penalty) ---")
+    t0_goc = time.time()
+    best_x_goc, best_f_goc, hist_goc = whale_optimize_GOC(
+        obj_penalty, dim, lb, ub, pop_size=POP_SIZE, max_iter=MAX_ITER, seed=seed
+    )
+    t1_goc = time.time()
+    
+    print("--- CHẠY EWOA BIẾN THỂ (Phi tuyến + Penalty) ---")
+    t0_ewoa = time.time()
+    best_x_ewoa, best_f_ewoa, hist_ewoa = whale_optimize_EWOA(
+        obj_penalty, dim, lb, ub, pop_size=POP_SIZE, max_iter=MAX_ITER, seed=seed
+    )
+    t1_ewoa = time.time()
+
+    # 3. PHÂN TÍCH KẾT QUẢ CUỐI CÙNG (Tính SINR và P_tx thực tế từ nghiệm tốt nhất)
+    def calculate_final_metrics(best_x):
+        M = h_fixed.size
+        real_w = best_x[:M]
+        imag_w = best_x[M:]
+        w = real_w + 1j * imag_w
+        
+        P_tx = np.vdot(w, w).real
+        signal_power = np.abs(np.vdot(h_fixed.conj(), w))**2
+        sinr = signal_power / (sigma2 + I_EXTERNAL)
+        return sinr, P_tx, signal_power
+
+    sinr_goc, p_tx_goc, s_goc = calculate_final_metrics(best_x_goc)
+    sinr_ewoa, p_tx_ewoa, s_ewoa = calculate_final_metrics(best_x_ewoa)
+    
+    # Tính cải thiện
+    sinr_improvement = sinr_ewoa - sinr_goc
+    percent_improvement = (sinr_improvement / sinr_goc) * 100 if sinr_goc != 0 else 0
+    
+    # In kết quả
+    print("\n================ KẾT QUẢ SO SÁNH (SINR + Penalty) ================")
+    print(f"Mô hình: Lambda={LAMBDA_PENALTY}, P_max={P_MAX}, Pop={POP_SIZE}, Iter={MAX_ITER}")
+    print("----------------------------------------------------------------")
+    print("1. WOA GỐC (Tuyến tính):")
+    print(f"   Final SINR: {sinr_goc:.4f}")
+    print(f"   Transmit Power P_tx: {p_tx_goc:.4f}")
+    print(f"   Time: {t1_goc - t0_goc:.4f} s")
+    print("2. EWOA BIẾN THỂ (Phi tuyến):")
+    print(f"   Final SINR: {sinr_ewoa:.4f}")
+    print(f"   Transmit Power P_tx: {p_tx_ewoa:.4f}")
+    print(f"   Time: {t1_ewoa - t0_ewoa:.4f} s")
+    print("----------------------------------------------------------------")
+    print(f"3. ĐÁNH GIÁ CẢI THIỆN:")
+    print(f"   SINR EWOA > SINR Gốc: {'CÓ' if sinr_ewoa > sinr_goc else 'KHÔNG'}")
+    print(f"   Cải thiện SINR: +{sinr_improvement:.4f} (Tăng {percent_improvement:.2f} %)")
+    print("================================================================")
